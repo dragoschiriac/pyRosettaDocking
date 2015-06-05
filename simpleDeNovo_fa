@@ -1,0 +1,73 @@
+
+from rosetta import *
+from random import *
+from math import *
+init()
+
+pose = low_pose = pose_from_sequence('A'*10)
+scorefxn = ScoreFunction()
+scorefxn.set_weight(fa_atr, 0.8)
+scorefxn.set_weight(fa_rep,0.44)
+scorefxn.set_weight(hbond_sr_bb, 1.17)
+scorefxn.set_weight(hbond_lr_bb, 1.17)
+scorefxn.set_weight(hbond_sc, 1.1)
+scorefxn.set_weight(hbond_bb_sc, 1.17)
+
+lowEnergy = 100
+
+#implement monte carlo protein conformation
+
+
+def trialMove(pose,lowEnergy):
+    res = randint(1,10)
+    if randint(0,1) == 0:  #randomly choose between phi and psi 
+        phi = pose.phi(res)
+        newPhi = gauss(phi, 25)   # chose a new psi wiht a distributin of 25
+        pose.set_phi(res, newPhi)
+        #check if the new phi is better
+        energy = scorefxn(pose)
+        #print energy
+        if energy < lowEnergy:
+            lowEnergy = energy
+            low_pose.assign(pose)
+        if monteCarlo(energy) == False:
+            pose.set_phi(res, phi)
+        return lowEnergy
+    else:
+        psi = pose.psi(res)
+        newPsi = gauss(psi, 25)
+        pose.set_psi(res, newPsi)
+        #check if the new psi is better
+        energy = scorefxn(pose)
+        #print energy
+        if energy < lowEnergy:
+            lowEnergy = energy
+            low_pose.assign(pose)
+        if monteCarlo(energy) == False:
+            pose.set_psi(res, psi)
+        return lowEnergy
+
+
+def monteCarlo(energy):
+    if energy < 0:
+        return True
+    else:
+        return metroCrit(energy)
+
+def metroCrit(value): #uses metropolis criteria to determine if move should be accepted
+    kT = 1
+    prob = exp(-value/kT)
+    if prob > random():
+        return True
+    else:
+        return False
+    
+
+for i in range(50000):
+    lowEnergy = trialMove(pose,lowEnergy)
+
+
+print "The Program is DONE !"
+pose.dump_pdb("regularPose.pdb")
+low_pose.dump_pdb("lowNRGPose.pdb")
+print lowEnergy

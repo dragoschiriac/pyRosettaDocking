@@ -1,0 +1,143 @@
+#Master file for the Rosetta Docking Protocl, carried out by iGEM Queens 2015
+
+import sys
+from rosetta import *
+init()
+
+def lowDock(fileName, subUnits, outNum):
+    #low docking protocol used to create decoys for high resolution docking
+    #creates a list including the pose number along with the energy value
+    #thsi can be used to easily seperate decoys
+    import rosetta.protocols.rigid as rigid_moves
+    scores = []  #list of energy scores to write to a log file
+    jump_num = 1
+    scorefxn_low = create_score_function("interchain_cen")
+    switch_low = SwitchResidueTypeSetMover("centroid")
+    pose = pose_from_pdb(fileName+".pdb")
+    pose_low = Pose()
+    randomize1 = rigid_moves.RigidBodyRandomizeMover(pose_low, jump_num, rigid_moves.partner_upstream)
+    randomize2 = rigid_moves.RigidBodyRandomizeMover(pose_low, jump_num, rigid_moves.partner_downstream)
+
+    setup_foldtree(pose, subUnits, Vector1([1]))
+    dock_lowres = DockingLowRes(scorefxn_low, jump_num)
+    
+    jd = PyJobDistributor("output", outNum, scorefxn_low)
+    jd.native_pose = pose
+
+    while not jd.job_complete():
+        pose_low.assign(pose)
+        randomize1.apply(pose_low)
+        randomize2.apply(pose_low)
+        dock_lowres.apply(pose_low)
+        if helixDist(pose,200,297):
+            scores.append(scorefxn_low(pose_low))
+            jd.output_decoy(pose_low)
+            
+    writeLog(nrgVal, "lowResPose.txt")
+            
+            
+def distance(v1, v2):        #finds the distance between two vectors
+    x = (v1[0] - v2[0])**2
+    y = (v1[1] - v2[1])**2
+    z = (v1[2] - v2[2])**2
+    d2 = x + y + z
+    dist = d2**0.5
+    return dist
+
+def helixDist(pose,hr1,hr2):
+    #this is the constraint used to check if E/K coils were close together
+    #hr is the atom number of the helices that are going to come together
+    CA1 = pose.residue(hr1).xyz("CA")
+    CA2 = pose.residue(hr2).xyz("CA")
+    helixDistance = distance(CA1,CA2)
+    if helixDistance < 25:
+        return True
+    return False
+
+def highDock(docName):
+    poseList = []
+    f = open(docName, "r")
+    for line in f.readlines():
+        tup = line.split(" ")
+        tup[1] = float(tup[1])
+        if tup[1] < 0:
+            poseList.append(tup)
+
+    #pose.dump_pdb("TestDocIgem.1.pdb")
+    scorefxn_high = create_score_function_ws_patch("pre_talaris_2013_standard.wts", "docking")
+    dock_hires = DockMCMProtocol()
+    dock_hires.set_scorefxn(scorefxn_high)
+    dock_hires.set_partners("B_A")
+
+    pose = Pose()
+    nrgVal = [] # used to keep track of the enegy vlaues of eahc high resolution decoy
+    #dock_hires.apply(pose)
+    for curPose in poseList:
+        output = "output_"+curPose[0]+".pdb"
+        nameFiles = "HighResOut.%s_" % curPose[0]
+        jd = PyJobDistributor(nameFiles, 10, scorefxn_high)
+        pose = pose_from_pdb(output)
+        native_pose = Pose()
+        native_pose.assign(pose)
+        jd.native_pose = native_pose
+        starting_pose = Pose()
+        starting_pose.assign(native_pose)
+
+        while not jd.job_complete:
+            pose.assign(starting_pose)
+            dock_hires.apply(pose)
+            jd.output_decoy(pose)
+            nrgVal.append([curPose[0],scorefxn_high(pose)])
+
+    writeLog(nrgVal, "HighResDoc.txt")
+    
+    
+
+def writeLog(logList,name):
+    #function used to output a log file containig data to be used for
+    #easy analysis 
+    fout = open(name, "w")
+    for i in range(len(logList)):
+        #print scores[i]
+        out = "%i %.6f \n" % ((i+1),scores[i])
+        #print out
+        fout.write(out)
+    fout.close()
+    
+
+def CircFunction(fileName):
+    pose = pose_from_pdb(fileName)  # make a function that takes in movable regions
+    lastPose = Pose()
+    lastPose.assign(pose)
+    scorefxn = get_fa_scorefxn()
+    lowEnrg = curEnrgy = scorefxn(pose)
+    kT = 1.0
+    n_moves = 1
+    movemap = MoveMap()
+    movemap.set_bb(False)
+    movemap.set_bb_true_range(66, 73)
+    #movemap.set_bb_true_range(1, 2)
+
+    small_mover = SmallMover(movemap, kT, n_moves)
+    #shear_mover = ShearMover(movemap, kT, n_moves)
+
+
+    elec =  pose.residue(73).xyz("CA")
+    nuc = pose.residue(1).xyz("N")
+    minDist = curDist = distance(nuc,elec)
+
+    while minDist > 1.3:   # keeps moving towards a folded state
+        #consider attepting to opatimize an a* search algorithm in the future
+        small_mover.apply(pose)
+        elec =  pose.residue(73).xyz("CA")
+        nuc = pose.residue(1).xyz("N")
+        curDist = distance(nuc,elec)
+        if curDist < minDist:
+            minDist = curDist
+            lastPose.assign(pose)
+        else:
+            pose.assign(lastPose)
+        
+    pose.dump_pdb("CircPlsOutput.pdb")
+    
+    
